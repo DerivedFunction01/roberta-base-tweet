@@ -211,10 +211,10 @@ def load_clean_salad_cache(cache_dir: Path = CACHE_DIR) -> dict[str, Dataset]:
 
     datasets_by_label: dict[str, Dataset] = {}
     for label, path_value in cache_files.items():
-        path = Path(str(path_value))
-        if not path.exists():
-            raise FileNotFoundError(f"Missing Salad-Data cache file: {path}")
-        datasets_by_label[str(label)] = load_dataset("parquet", data_files=str(path), split="train")
+        cache_path = Path(str(path_value))
+        if not cache_path.exists():
+            raise FileNotFoundError(f"Missing Salad-Data cache file: {cache_path}")
+        datasets_by_label[str(label)] = load_dataset("parquet", data_files=str(cache_path), split="train")
     return datasets_by_label
 
 
