@@ -181,6 +181,7 @@ def make_training_args(
         report_to="tensorboard",
         seed=SEED,
         dataloader_num_workers=get_workers(),
+        push_to_hub=True
     )
 
 
