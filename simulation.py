@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
         "--examples",
         nargs="+",
         type=int,
-        default=[70_000],
+        default=[60_000],
         help="One or more target dataset sizes to simulate.",
     )
     return parser.parse_args()

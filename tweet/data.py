@@ -25,6 +25,17 @@ class PoolSampler:
         self.rng = random.Random(seed)
         self.max_uses = max(1, reuse_limit + 1)
         self.usage_counts = {label: [0] * len(texts) for label, texts in pools.items()}
+        self.label_order = {
+            label: sorted(
+                range(len(texts)),
+                key=lambda idx: (int(texts[idx].get("source_id", idx)), idx),
+            )
+            for label, texts in pools.items()
+        }
+        self.label_positions = {
+            label: (self.rng.randrange(len(texts)) if texts else 0)
+            for label, texts in pools.items()
+        }
         self.label_weights = {
             label: float(len(texts))
             for label, texts in pools.items()
@@ -46,7 +57,21 @@ class PoolSampler:
         eligible = self._eligible_indices(label)
         if not eligible:
             raise RuntimeError(f"No reusable examples left in label pool '{label}'")
-        index = self.rng.choice(eligible)
+        counts = self.usage_counts[label]
+        min_uses = min(counts[idx] for idx in eligible)
+        candidates = [idx for idx in eligible if counts[idx] == min_uses]
+        order = self.label_order[label]
+        start = self.label_positions[label] % len(order)
+        index = None
+        for offset in range(len(order)):
+            candidate = order[(start + offset) % len(order)]
+            if candidate in candidates:
+                index = candidate
+                self.label_positions[label] = (start + offset + 1) % len(order)
+                break
+        if index is None:
+            index = candidates[0]
+            self.label_positions[label] = (start + 1) % len(order)
         self.usage_counts[label][index] += 1
         return self.pools[label][index]
 
