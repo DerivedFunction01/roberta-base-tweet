@@ -43,7 +43,7 @@ from salad.defaults import (
     TEXT_COLUMN,
 )
 from salad.jailbreak_filter import load_filter_model
-from salad.labels import slugify_label
+from salad.labels import OUTSIDE_LABEL, slugify_label
 
 
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
