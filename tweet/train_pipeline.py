@@ -25,7 +25,7 @@ from tweet.defaults import (
     USE_TWEET_MUTATION,
     VALIDATION_EXAMPLES,
 )
-from tweet.mutations import TweetMutator
+from text_utils.mutations import TweetMutator
 
 DEFAULT_LABEL2ID = {"neg": 0, "neu": 1, "pos": 2}
 
