@@ -6,6 +6,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
+import pyarrow.parquet as pq
 from datasets import Dataset, load_dataset
 from tqdm.auto import tqdm
 
@@ -35,6 +36,11 @@ def save_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def load_local_parquet_dataset(parquet_path: Path) -> Dataset:
+    table = pq.read_table(str(parquet_path))
+    return Dataset.from_dict(table.to_pydict())
 
 
 def normalize_label(value: Any) -> str:
@@ -214,7 +220,7 @@ def load_clean_salad_cache(cache_dir: Path = CACHE_DIR) -> dict[str, Dataset]:
         cache_path = Path(str(path_value))
         if not cache_path.exists():
             raise FileNotFoundError(f"Missing Salad-Data cache file: {cache_path}")
-        datasets_by_label[str(label)] = load_dataset("parquet", data_files=str(cache_path), split="train")
+        datasets_by_label[str(label)] = load_local_parquet_dataset(cache_path)
     return datasets_by_label
 
 
@@ -319,7 +325,7 @@ def load_openhermes_outside_cache(cache_dir: Path = NEUTRAL_CACHE_DIR) -> Datase
     out_path = Path(cache_file)
     if not out_path.exists():
         raise FileNotFoundError(f"Missing OpenHermes outside cache file: {out_path}")
-    return load_dataset("parquet", data_files=str(out_path), split="train")
+    return load_local_parquet_dataset(out_path)
 
 
 def build_openhermes_outside_cache(

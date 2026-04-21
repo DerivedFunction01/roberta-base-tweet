@@ -15,12 +15,13 @@ from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 
 from paths import path
-from salad.cache import ensure_clean_salad_cache, ensure_openhermes_outside_cache
+from salad.cache import ensure_clean_salad_cache, ensure_openhermes_outside_cache, load_local_parquet_dataset
 from salad.data import build_tokenized_split
 from salad.defaults import (
     BALANCED_COVERAGE_RATIO,
     CACHE_DIR,
     DATASET_NAME,
+    JAILBREAK_PARQUET,
     LABEL_COLUMN,
     MAX_LENGTH,
     MAX_SENTENCES,
@@ -46,7 +47,7 @@ from salad.defaults import (
     TEXT_COLUMN,
     USE_SALAD_MUTATION,
 )
-from salad.labels import OUTSIDE_LABEL, save_label_map, slugify_label
+from salad.labels import OUTSIDE_LABEL, load_label_map, slugify_label
 from text_utils.mutations import TweetMutator
 
 
@@ -76,15 +77,18 @@ def main() -> None:
         cache_dir=NEUTRAL_CACHE_DIR,
     )
 
-    category_labels = list(cache_meta["label_names"])
-    label2id = save_label_map(category_labels)
+    jailbreak_split = load_local_parquet_dataset(JAILBREAK_PARQUET)
+    jailbreak_label = "Jailbreak"
+
+    label2id = load_label_map()
     id2label = {idx: label for label, idx in label2id.items()}
+    category_labels = list(dict.fromkeys([*cache_meta["label_names"], jailbreak_label]))
     category_to_slug = {label: slugify_label(label) for label in category_labels}
 
     tokenizer = AutoTokenizer.from_pretrained("roberta-base", use_fast=True)
     mutator = TweetMutator() if USE_SALAD_MUTATION else None
 
-    combined_split = concatenate_datasets([*unsafe_label_splits.values(), outside_split])
+    combined_split = concatenate_datasets([*unsafe_label_splits.values(), jailbreak_split, outside_split])
 
     if TOKENIZED_DATASET_DIR.exists():
         shutil.rmtree(TOKENIZED_DATASET_DIR)
@@ -95,7 +99,8 @@ def main() -> None:
     print("BUILDING SALAD TOKEN CLASSIFICATION CACHE")
     print("=" * 80)
     print(f"Unsafe dataset: {DATASET_NAME} / {SUBSET}")
-    print(f"Unsafe labels: {category_labels}")
+    print(f"Label groups: {category_labels}")
+    print(f"Jailbreak parquet: {JAILBREAK_PARQUET}")
     print(f"Outside dataset: {NEUTRAL_DATASET_NAME} / {NEUTRAL_SPLIT}")
     print(f"Tokenizer: roberta-base")
     print(f"Output: {TOKENIZED_DATASET_DIR}")

@@ -17,6 +17,7 @@ NEUTRAL_SAMPLE_FRACTION = 0.30
 NEUTRAL_MAX_SENTENCES = 3
 NEUTRAL_MIN_LATIN_RATIO = 0.5
 NEUTRAL_CACHE_DIR = path("salad", "salad_outside_cache_dir")
+JAILBREAK_PARQUET = path("salad", "jailbreak_parquet")
 TOKENIZED_DATASET_DIR = path("salad", "salad_tokenized_dataset_dir")
 TOKENIZED_DATASET_META = path("salad", "salad_tokenized_dataset_meta")
 PIPELINE_RESULTS_DIR = path("salad", "salad_pipeline_results_dir")

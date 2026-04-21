@@ -27,6 +27,7 @@ PATHS = {
         "salad_cache_meta_file": PROJECT_ROOT / "salad_cache" / "meta.json",
         "salad_outside_cache_dir": PROJECT_ROOT / "salad_outside_cache",
         "salad_outside_cache_meta_file": PROJECT_ROOT / "salad_outside_cache" / "meta.json",
+        "jailbreak_parquet": PROJECT_ROOT / "jailbreak" / "jailbreak.parquet",
         "salad_label_map_file": PROJECT_ROOT / "salad_label2id.json",
         "salad_tokenized_dataset_dir": PROJECT_ROOT / "salad_tokenized_dataset",
         "salad_tokenized_dataset_meta": PROJECT_ROOT / "salad_tokenized_dataset" / "cache_meta.json",
