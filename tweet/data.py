@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import math
+from collections import deque
 from typing import Any
 
 import numpy as np
@@ -24,48 +25,21 @@ class PoolSampler:
         self.pools = pools
         self.rng = random.Random(seed)
         self.max_uses = max(1, reuse_limit + 1)
-        self.usage_counts = {label: [0] * len(texts) for label, texts in pools.items()}
-        self.current_cycle = 0
-        self.label_order = {
-            label: sorted(
+        self.remaining_uses = {label: [self.max_uses] * len(texts) for label, texts in pools.items()}
+        self.remaining_counts = {label: len(texts) * self.max_uses for label, texts in pools.items()}
+        self.label_queues = {}
+        for label, texts in pools.items():
+            order = sorted(
                 range(len(texts)),
                 key=lambda idx: (int(texts[idx].get("source_id", idx)), idx),
             )
-            for label, texts in pools.items()
-        }
-        self.label_positions = {
-            label: (self.rng.randrange(len(texts)) if texts else 0)
-            for label, texts in pools.items()
-        }
-        self.label_weights = {
-            label: float(len(texts))
-            for label, texts in pools.items()
-        }
+            self.rng.shuffle(order)
+            self.label_queues[label] = deque(order)
         self.balanced_position = self.rng.randrange(len(SENTIMENT_LABELS))
-
-    def _eligible_indices(self, label: str) -> list[int]:
-        return [
-            idx
-            for idx, count in enumerate(self.usage_counts[label])
-            if count == self.current_cycle
-        ]
-
-    def _advance_cycle(self) -> bool:
-        next_cycle = self.current_cycle + 1
-        if any(
-            any(count == next_cycle for count in counts)
-            for counts in self.usage_counts.values()
-        ):
-            self.current_cycle = next_cycle
-            return True
-        return False
 
     def _active_labels(self, labels: list[str] | None = None) -> list[str]:
         labels = labels or list(SENTIMENT_LABELS)
-        active = [label for label in labels if self._eligible_indices(label)]
-        while not active and self._advance_cycle():
-            active = [label for label in labels if self._eligible_indices(label)]
-        return active
+        return [label for label in labels if self.remaining_counts[label] > 0]
 
     def active_labels(self, labels: list[str] | None = None) -> list[str]:
         return self._active_labels(labels)
@@ -97,29 +71,19 @@ class PoolSampler:
         return chosen
 
     def sample_record(self, label: str) -> dict[str, Any]:
-        eligible = self._eligible_indices(label)
-        if not eligible:
-            while self._advance_cycle():
-                eligible = self._eligible_indices(label)
-                if eligible:
-                    break
-            if not eligible:
-                raise RuntimeError(f"No reusable examples left in label pool '{label}'")
-        counts = self.usage_counts[label]
-        order = self.label_order[label]
-        start = self.label_positions[label] % len(order)
-        index = None
-        for offset in range(len(order)):
-            candidate = order[(start + offset) % len(order)]
-            if candidate in eligible:
-                index = candidate
-                self.label_positions[label] = (start + offset + 1) % len(order)
-                break
-        if index is None:
-            index = eligible[0]
-            self.label_positions[label] = (start + 1) % len(order)
-        self.usage_counts[label][index] += 1
-        return self.pools[label][index]
+        queue = self.label_queues[label]
+        while queue:
+            index = queue.popleft()
+            remaining = self.remaining_uses[label][index]
+            if remaining <= 0:
+                continue
+            remaining -= 1
+            self.remaining_uses[label][index] = remaining
+            self.remaining_counts[label] -= 1
+            if remaining > 0:
+                queue.append(index)
+            return self.pools[label][index]
+        raise RuntimeError(f"No reusable examples left in label pool '{label}'")
 
     def sample_text(self, label: str) -> str:
         return str(self.sample_record(label)["text"])
