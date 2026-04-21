@@ -10,6 +10,7 @@ from tqdm.auto import tqdm
 from transformers import PreTrainedTokenizerBase
 
 from salad.labels import OUTSIDE_LABEL, slugify_label
+from text_utils.mutations import TweetMutator
 
 
 def _allocate_counts(total: int, ratios: dict[str, float]) -> dict[str, int]:
@@ -138,20 +139,39 @@ class PoolSampler:
         return self.pools[label][index]
 
 
-def _build_pools(split: Dataset, *, text_column: str = "text", label_column: str = "label") -> dict[str, list[dict[str, Any]]]:
+def _build_pools(
+    split: Dataset,
+    *,
+    text_column: str = "text",
+    label_column: str = "label",
+    mutator: TweetMutator | None = None,
+    mutation_seed: int = 42,
+) -> dict[str, list[dict[str, Any]]]:
     pools: dict[str, list[dict[str, Any]]] = {}
+    rng = random.Random(mutation_seed)
     for fallback_source_id, row in enumerate(split):
         text = str(row.get(text_column, "")).strip()
         if not text:
             continue
         label = _normalize_label(row[label_column])
+        source_id = int(row.get("source_id", fallback_source_id))
         pools.setdefault(label, []).append(
             {
-                "source_id": int(row.get("source_id", fallback_source_id)),
+                "source_id": source_id,
                 "text": text,
                 "label": label,
             }
         )
+        if mutator is not None:
+            for variant in mutator.augment(text, rng=rng, lang=None):
+                if variant != text:
+                    pools[label].append(
+                        {
+                            "source_id": source_id,
+                            "text": variant,
+                            "label": label,
+                        }
+                    )
     return pools
 
 
@@ -201,8 +221,16 @@ def build_standalone_examples(
     seed: int,
     text_column: str = "text",
     label_column: str = "label",
+    mutator: TweetMutator | None = None,
+    mutation_seed: int = 42,
 ) -> tuple[Dataset, dict[str, Any]]:
-    pools = _build_pools(split, text_column=text_column, label_column=label_column)
+    pools = _build_pools(
+        split,
+        text_column=text_column,
+        label_column=label_column,
+        mutator=mutator,
+        mutation_seed=mutation_seed,
+    )
     for label, records in pools.items():
         if not records:
             raise RuntimeError(f"Pool '{label}' is empty; cannot build standalone examples")
@@ -280,11 +308,19 @@ def build_paired_examples(
     seed: int,
     text_column: str = "text",
     label_column: str = "label",
+    mutator: TweetMutator | None = None,
+    mutation_seed: int = 42,
 ) -> tuple[Dataset, dict[str, Any]]:
     if pair_kind not in {"same", "mixed"}:
         raise ValueError(f"Unsupported pair kind: {pair_kind}")
 
-    pools = _build_pools(split, text_column=text_column, label_column=label_column)
+    pools = _build_pools(
+        split,
+        text_column=text_column,
+        label_column=label_column,
+        mutator=mutator,
+        mutation_seed=mutation_seed,
+    )
     for label, records in pools.items():
         if not records:
             raise RuntimeError(f"Pool '{label}' is empty; cannot build paired examples")
@@ -407,6 +443,8 @@ def build_tokenized_split(
     category_labels: list[str],
     text_column: str = "text",
     label_column: str = "label",
+    mutator: TweetMutator | None = None,
+    mutation_seed: int = 42,
 ) -> tuple[Dataset, dict[str, Any]]:
     counts = _allocate_counts(
         num_examples,
@@ -427,6 +465,8 @@ def build_tokenized_split(
         seed=seed,
         text_column=text_column,
         label_column=label_column,
+        mutator=mutator,
+        mutation_seed=mutation_seed,
     )
     same, same_summary = build_paired_examples(
         split,
@@ -438,6 +478,8 @@ def build_tokenized_split(
         seed=seed,
         text_column=text_column,
         label_column=label_column,
+        mutator=mutator,
+        mutation_seed=mutation_seed,
     )
     mixed, mixed_summary = build_paired_examples(
         split,
@@ -449,6 +491,8 @@ def build_tokenized_split(
         seed=seed,
         text_column=text_column,
         label_column=label_column,
+        mutator=mutator,
+        mutation_seed=mutation_seed,
     )
 
     standalone_tokenized = standalone.map(

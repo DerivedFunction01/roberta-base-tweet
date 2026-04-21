@@ -44,8 +44,10 @@ from salad.defaults import (
     VALIDATION_EXAMPLES,
     SUBSET,
     TEXT_COLUMN,
+    USE_SALAD_MUTATION,
 )
 from salad.labels import OUTSIDE_LABEL, save_label_map, slugify_label
+from text_utils.mutations import TweetMutator
 
 
 def save_json(path: Path, payload: dict[str, Any]) -> None:
@@ -80,6 +82,7 @@ def main() -> None:
     category_to_slug = {label: slugify_label(label) for label in category_labels}
 
     tokenizer = AutoTokenizer.from_pretrained("roberta-base", use_fast=True)
+    mutator = TweetMutator() if USE_SALAD_MUTATION else None
 
     combined_split = concatenate_datasets([*unsafe_label_splits.values(), outside_split])
 
@@ -124,6 +127,8 @@ def main() -> None:
             category_labels=category_labels,
             text_column="text",
             label_column="label",
+            mutator=mutator if split_name == "train" else None,
+            mutation_seed=42,
         )
         tokenized_splits[split_name] = split
         split_summaries[split_name] = summary
@@ -149,6 +154,7 @@ def main() -> None:
             "mixed_class_ratio": MIXED_CLASS_RATIO,
             "balanced_coverage_ratio": BALANCED_COVERAGE_RATIO,
             "reuse_limit": REUSE_LIMIT,
+            "mutation": {"enabled": USE_SALAD_MUTATION},
             "train_examples": TRAIN_EXAMPLES,
             "validation_examples": VALIDATION_EXAMPLES,
             "test_examples": TEST_EXAMPLES,
