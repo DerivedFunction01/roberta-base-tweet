@@ -373,34 +373,39 @@ def _save_json(path: Path, payload: dict[str, Any]) -> None:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
+def _format_pct(value: float) -> str:
+    return f"{value:.1%}"
+
+
 def main() -> None:
     args = _parse_args()
 
-    print("=" * 80)
-    print("TESTING ON CARDIFFNLP/TWEET_EVAL SENTIMENT")
-    print("=" * 80)
-
-    print("\n1. Loading models and tokenizer...")
-    print(f"   ✓ Token model: {args.model_name}")
-    print(f"   ✓ Baseline: {args.baseline_model_name}")
-    print(f"   ✓ Tokenizer: {args.tokenizer_name}")
+    print("# Tweet Eval Sentiment Evaluation")
+    print()
+    print("## Setup")
+    print(f"- Token model: `{args.model_name}`")
+    print(f"- Baseline: `{args.baseline_model_name}`")
+    print(f"- Tokenizer: `{args.tokenizer_name}`")
     token_model = AutoModelForTokenClassification.from_pretrained(args.model_name)
     baseline_model = AutoModelForSequenceClassification.from_pretrained(args.baseline_model_name)
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name, use_fast=True)
 
-    print("\n2. Loading dataset...")
+    print()
+    print("## Dataset")
     split = _load_sentiment_split(args.split)
-    print(f"   ✓ Split '{args.split}' has {len(split)} examples")
+    print(f"- Split: `{args.split}`")
+    print(f"- Examples: `{len(split)}`")
 
     limit = min(args.limit, len(split)) if args.limit is not None else len(split)
     if limit != len(split):
-        print(f"   ✓ Limiting evaluation to {limit} examples")
+        print(f"- Limit: `{limit}`")
 
     sample = split.select(range(limit))
     raw_texts = [str(example["text"]) for example in sample]
     texts = _clean_texts(raw_texts, enabled=not args.no_clean_text)
 
-    print("\n3. Running inference...")
+    print()
+    print("## Inference")
     token_predictions = _predict_token_model_sentiments(
         texts,
         model=token_model,
@@ -416,7 +421,8 @@ def main() -> None:
         max_length=args.max_length,
     )
 
-    print("\n4. Scoring...")
+    print()
+    print("## Scoring")
     y_true: list[str] = []
     token_pred_labels: list[str] = []
     baseline_pred_labels: list[str] = []
@@ -462,90 +468,71 @@ def main() -> None:
     baseline_metrics = _compute_metrics(y_true, baseline_pred_labels)
     deltas = _compute_delta_metrics(token_metrics, baseline_metrics)
 
-    print("\n" + "=" * 80)
-    print("OVERALL RESULTS")
-    print("=" * 80)
-    print(f"{'Model':<34} {'Acc':>8} {'Macro F1':>10} {'Macro P':>10} {'Macro R':>10}")
-    print("-" * 80)
+    print()
+    print("## Overall Results")
+    print("| Model | Acc | Macro F1 | Macro P | Macro R |")
+    print("|---|---:|---:|---:|---:|")
     print(
-        f"{'Token-classification collapse':<34} "
-        f"{token_metrics['accuracy']:>8.1%} "
-        f"{token_metrics['macro_f1']:>10.1%} "
-        f"{token_metrics['macro_precision']:>10.1%} "
-        f"{token_metrics['macro_recall']:>10.1%}"
+        f"| Token-classification collapse | {_format_pct(token_metrics['accuracy'])} | "
+        f"{_format_pct(token_metrics['macro_f1'])} | {_format_pct(token_metrics['macro_precision'])} | "
+        f"{_format_pct(token_metrics['macro_recall'])} |"
     )
     print(
-        f"{'CardiffNLP baseline':<34} "
-        f"{baseline_metrics['accuracy']:>8.1%} "
-        f"{baseline_metrics['macro_f1']:>10.1%} "
-        f"{baseline_metrics['macro_precision']:>10.1%} "
-        f"{baseline_metrics['macro_recall']:>10.1%}"
+        f"| CardiffNLP baseline | {_format_pct(baseline_metrics['accuracy'])} | "
+        f"{_format_pct(baseline_metrics['macro_f1'])} | {_format_pct(baseline_metrics['macro_precision'])} | "
+        f"{_format_pct(baseline_metrics['macro_recall'])} |"
     )
-    print("-" * 80)
     print(
-        f"{'Delta (token - baseline)':<34} "
-        f"{deltas['accuracy_delta']:>+8.1%} "
-        f"{deltas['macro_f1_delta']:>+10.1%} "
-        f"{deltas['macro_precision_delta']:>+10.1%} "
-        f"{deltas['macro_recall_delta']:>+10.1%}"
+        f"| Delta (token - baseline) | {deltas['accuracy_delta']:+.1%} | {deltas['macro_f1_delta']:+.1%} | "
+        f"{deltas['macro_precision_delta']:+.1%} | {deltas['macro_recall_delta']:+.1%} |"
     )
 
-    print("\n" + "=" * 80)
-    print("PER-CLASS BREAKDOWN")
-    print("=" * 80)
-    print(f"{'Label':<8} {'Token F1':>10} {'Base F1':>10} {'Token P':>10} {'Base P':>10} {'Token R':>10} {'Base R':>10}")
-    print("-" * 74)
+    print()
+    print("## Per-Class Breakdown")
+    print("| Label | Token F1 | Base F1 | Token P | Base P | Token R | Base R |")
+    print("|---|---:|---:|---:|---:|---:|---:|")
     for label in SENTIMENT_LABELS:
         token_stats = token_metrics["per_class"][label]
         baseline_stats = baseline_metrics["per_class"][label]
         print(
-            f"{label:<8} "
-            f"{token_stats['f1']:>10.1%} "
-            f"{baseline_stats['f1']:>10.1%} "
-            f"{token_stats['precision']:>10.1%} "
-            f"{baseline_stats['precision']:>10.1%} "
-            f"{token_stats['recall']:>10.1%} "
-            f"{baseline_stats['recall']:>10.1%}"
+            f"| {label} | {_format_pct(token_stats['f1'])} | {_format_pct(baseline_stats['f1'])} | "
+            f"{_format_pct(token_stats['precision'])} | {_format_pct(baseline_stats['precision'])} | "
+            f"{_format_pct(token_stats['recall'])} | {_format_pct(baseline_stats['recall'])} |"
         )
 
-    print("\n" + "=" * 80)
-    print("CONFUSION MATRICES")
-    print("=" * 80)
+    print()
+    print("## Confusion Matrices")
     for title, metrics in (
         ("Token-classification collapse", token_metrics),
         ("CardiffNLP baseline", baseline_metrics),
     ):
-        print(f"\n{title}")
-        header = "          " + " ".join(f"{label:>8}" for label in SENTIMENT_LABELS)
-        print(header)
+        print()
+        print(f"### {title}")
+        print("| True \\ Pred | neg | neu | pos |")
+        print("|---|---:|---:|---:|")
         for label, row in zip(SENTIMENT_LABELS, metrics["confusion_matrix"]):
-            row_text = " ".join(f"{int(value):>8}" for value in row)
-            print(f"{label:>8} {row_text}")
+            print(f"| {label} | {int(row[0])} | {int(row[1])} | {int(row[2])} |")
 
-    print("\n" + "=" * 80)
-    print("SAMPLE ERRORS")
-    print("=" * 80)
-    print("Token-classification collapse")
+    print()
+    print("## Sample Errors")
+    print("### Token-classification collapse")
     if token_mismatches:
         for sample_error in token_mismatches[:5]:
-            print(
-                f"{sample_error['true_label']} -> {sample_error['predicted']} "
-                f"(scores: {sample_error['scores']})"
-            )
-            print(f"  {sample_error['text_preview']}...")
+            print(f"- `{sample_error['true_label']}` -> `{sample_error['predicted']}`")
+            print(f"  - Scores: `{sample_error['scores']}`")
+            print(f"  - Preview: {sample_error['text_preview']}...")
     else:
-        print("No mismatches found.")
+        print("- No mismatches found.")
 
-    print("\nCardiffNLP baseline")
+    print()
+    print("### CardiffNLP baseline")
     if baseline_mismatches:
         for sample_error in baseline_mismatches[:5]:
-            print(
-                f"{sample_error['true_label']} -> {sample_error['predicted']} "
-                f"(scores: {sample_error['scores']})"
-            )
-            print(f"  {sample_error['text_preview']}...")
+            print(f"- `{sample_error['true_label']}` -> `{sample_error['predicted']}`")
+            print(f"  - Scores: `{sample_error['scores']}`")
+            print(f"  - Preview: {sample_error['text_preview']}...")
     else:
-        print("No mismatches found.")
+        print("- No mismatches found.")
 
     args.results_dir.mkdir(parents=True, exist_ok=True)
     results_output = args.results_dir / "results.json"
@@ -581,12 +568,11 @@ def main() -> None:
         for item in baseline_mismatches:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
-    print("\n" + "=" * 80)
-    print("SAVED OUTPUT")
-    print("=" * 80)
-    print(f"✓ Results saved to {results_output}")
-    print(f"✓ Token-model mismatches saved to {token_mismatch_output}")
-    print(f"✓ Baseline mismatches saved to {baseline_mismatch_output}")
+    print()
+    print("## Saved Output")
+    print(f"- Results: `{results_output}`")
+    print(f"- Token-model mismatches: `{token_mismatch_output}`")
+    print(f"- Baseline mismatches: `{baseline_mismatch_output}`")
 
 
 if __name__ == "__main__":
