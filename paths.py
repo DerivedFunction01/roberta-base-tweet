@@ -25,6 +25,8 @@ PATHS = {
     "salad": {
         "salad_cache_dir": PROJECT_ROOT / "salad_cache",
         "salad_cache_meta_file": PROJECT_ROOT / "salad_cache" / "meta.json",
+        "salad_outside_cache_dir": PROJECT_ROOT / "salad_outside_cache",
+        "salad_outside_cache_meta_file": PROJECT_ROOT / "salad_outside_cache" / "meta.json",
         "salad_results_dir": PROJECT_ROOT / "results" / "salad_data",
     },
 }

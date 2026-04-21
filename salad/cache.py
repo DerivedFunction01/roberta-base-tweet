@@ -10,7 +10,22 @@ from datasets import Dataset, load_dataset
 from tqdm.auto import tqdm
 
 from paths import path
-from salad.defaults import DATASET_NAME, LABEL_COLUMN, MAX_SENTENCES, MIN_LATIN_RATIO, SUBSET, TEXT_COLUMN
+from salad.defaults import (
+    CACHE_DIR,
+    DATASET_NAME,
+    LABEL_COLUMN,
+    MAX_SENTENCES,
+    MIN_LATIN_RATIO,
+    NEUTRAL_CACHE_DIR,
+    NEUTRAL_DATASET_NAME,
+    NEUTRAL_MAX_SENTENCES,
+    NEUTRAL_MIN_LATIN_RATIO,
+    NEUTRAL_SAMPLE_FRACTION,
+    NEUTRAL_SPLIT,
+    NEUTRAL_TEXT_COLUMN,
+    SUBSET,
+    TEXT_COLUMN,
+)
 
 
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
@@ -75,10 +90,27 @@ def _slugify_label(label: str) -> str:
     return slug or "label"
 
 
-def _load_split(dataset_name: str, subset: str, split_name: str) -> Dataset:
-    loaded = load_dataset(dataset_name, subset, split=split_name)
+def _load_split(
+    dataset_name: str,
+    subset: str | None,
+    split_name: str,
+    *,
+    sample_fraction: float | None = None,
+) -> Dataset:
+    split_spec = split_name
+    if sample_fraction is not None:
+        if not 0 < sample_fraction <= 1:
+            raise ValueError("sample_fraction must be in the interval (0, 1]")
+        if sample_fraction < 1:
+            split_spec = f"{split_name}[:{sample_fraction * 100:g}%]"
+
+    if subset is None:
+        loaded = load_dataset(dataset_name, split=split_spec)
+    else:
+        loaded = load_dataset(dataset_name, subset, split=split_spec)
     if not isinstance(loaded, Dataset):
-        raise TypeError(f"Expected a Dataset for {dataset_name}/{subset}/{split_name}, got {type(loaded)!r}")
+        label = f"{dataset_name}/{split_spec}" if subset is None else f"{dataset_name}/{subset}/{split_spec}"
+        raise TypeError(f"Expected a Dataset for {label}, got {type(loaded)!r}")
     return loaded
 
 
@@ -116,7 +148,59 @@ def _filter_split(
     return split.select(kept_indices), stats
 
 
-def load_clean_salad_cache(cache_dir: Path = path("salad", "salad_cache_dir")) -> dict[str, Dataset]:
+def _first_human_turn(conversations: Any) -> str:
+    if isinstance(conversations, str):
+        return conversations.strip()
+    if not isinstance(conversations, list):
+        return ""
+    for turn in conversations:
+        if not isinstance(turn, dict):
+            continue
+        if str(turn.get("from", "")).strip().lower() != "human":
+            continue
+        return str(turn.get("value", "")).strip()
+    return ""
+
+
+def _filter_openhermes_split(
+    split: Dataset,
+    *,
+    conversations_column: str,
+    max_sentences: int,
+    min_latin_ratio: float,
+) -> tuple[Dataset, dict[str, int]]:
+    kept_indices: list[int] = []
+    stats = {
+        "total": 0,
+        "kept": 0,
+        "dropped_empty": 0,
+        "dropped_no_human_turn": 0,
+        "dropped_sentence_count": 0,
+        "dropped_script": 0,
+    }
+
+    for idx, row in enumerate(tqdm(split, desc="Filtering OpenHermes")):
+        stats["total"] += 1
+        human_text = _first_human_turn(row.get(conversations_column, ""))
+        if not human_text:
+            stats["dropped_no_human_turn"] += 1
+            continue
+        if not human_text.strip():
+            stats["dropped_empty"] += 1
+            continue
+        if sentence_count(human_text) > max_sentences:
+            stats["dropped_sentence_count"] += 1
+            continue
+        if not is_majority_latin(human_text, min_ratio=min_latin_ratio):
+            stats["dropped_script"] += 1
+            continue
+        kept_indices.append(idx)
+        stats["kept"] += 1
+
+    return split.select(kept_indices), stats
+
+
+def load_clean_salad_cache(cache_dir: Path = CACHE_DIR) -> dict[str, Dataset]:
     meta_file = path("salad", "salad_cache_meta_file")
     if not meta_file.exists():
         raise FileNotFoundError(f"Missing Salad-Data cache metadata: {meta_file}")
@@ -143,7 +227,7 @@ def build_clean_salad_cache(
     label_column: str = LABEL_COLUMN,
     max_sentences: int = MAX_SENTENCES,
     min_latin_ratio: float = MIN_LATIN_RATIO,
-    cache_dir: Path = path("salad", "salad_cache_dir"),
+    cache_dir: Path = CACHE_DIR,
 ) -> tuple[dict[str, Dataset], dict[str, Any]]:
     raw = _load_split(dataset_name, subset, split_name)
     filtered, filter_stats = _filter_split(
@@ -204,7 +288,7 @@ def ensure_clean_salad_cache(
     label_column: str = LABEL_COLUMN,
     max_sentences: int = MAX_SENTENCES,
     min_latin_ratio: float = MIN_LATIN_RATIO,
-    cache_dir: Path = path("salad", "salad_cache_dir"),
+    cache_dir: Path = CACHE_DIR,
 ) -> tuple[dict[str, Dataset], dict[str, Any]]:
     meta_file = path("salad", "salad_cache_meta_file")
     if meta_file.exists():
@@ -220,5 +304,93 @@ def ensure_clean_salad_cache(
         label_column=label_column,
         max_sentences=max_sentences,
         min_latin_ratio=min_latin_ratio,
+        cache_dir=cache_dir,
+    )
+
+
+def load_openhermes_outside_cache(cache_dir: Path = NEUTRAL_CACHE_DIR) -> Dataset:
+    meta_file = path("salad", "salad_outside_cache_meta_file")
+    if not meta_file.exists():
+        raise FileNotFoundError(f"Missing OpenHermes outside cache metadata: {meta_file}")
+    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    cache_file = meta.get("cache_file")
+    if not isinstance(cache_file, str):
+        raise ValueError(f"Malformed outside cache metadata in {meta_file}")
+    out_path = Path(cache_file)
+    if not out_path.exists():
+        raise FileNotFoundError(f"Missing OpenHermes outside cache file: {out_path}")
+    return load_dataset("parquet", data_files=str(out_path), split="train")
+
+
+def build_openhermes_outside_cache(
+    dataset_name: str = NEUTRAL_DATASET_NAME,
+    *,
+    split_name: str = NEUTRAL_SPLIT,
+    conversations_column: str = NEUTRAL_TEXT_COLUMN,
+    max_sentences: int = NEUTRAL_MAX_SENTENCES,
+    min_latin_ratio: float = NEUTRAL_MIN_LATIN_RATIO,
+    sample_fraction: float = NEUTRAL_SAMPLE_FRACTION,
+    cache_dir: Path = NEUTRAL_CACHE_DIR,
+) -> tuple[Dataset, dict[str, Any]]:
+    raw = _load_split(dataset_name, None, split_name, sample_fraction=sample_fraction)
+    filtered, filter_stats = _filter_openhermes_split(
+        raw,
+        conversations_column=conversations_column,
+        max_sentences=max_sentences,
+        min_latin_ratio=min_latin_ratio,
+    )
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    records = [
+        {
+            "source_id": int(idx),
+            "text": _first_human_turn(row.get(conversations_column, "")),
+            "label": "outside",
+        }
+        for idx, row in enumerate(filtered)
+    ]
+    dataset = Dataset.from_list(records)
+    out_path = cache_dir / "outside.parquet"
+    dataset.to_parquet(str(out_path))
+
+    meta = {
+        "dataset_name": dataset_name,
+        "split_name": split_name,
+        "conversations_column": conversations_column,
+        "max_sentences": max_sentences,
+        "min_latin_ratio": min_latin_ratio,
+        "sample_fraction": sample_fraction,
+        "filter_stats": filter_stats,
+        "cache_file": str(out_path),
+        "total_rows": filter_stats["kept"],
+        "label": "outside",
+    }
+    save_json(path("salad", "salad_outside_cache_meta_file"), meta)
+    return dataset, meta
+
+
+def ensure_openhermes_outside_cache(
+    dataset_name: str = NEUTRAL_DATASET_NAME,
+    *,
+    split_name: str = NEUTRAL_SPLIT,
+    conversations_column: str = NEUTRAL_TEXT_COLUMN,
+    max_sentences: int = NEUTRAL_MAX_SENTENCES,
+    min_latin_ratio: float = NEUTRAL_MIN_LATIN_RATIO,
+    sample_fraction: float = NEUTRAL_SAMPLE_FRACTION,
+    cache_dir: Path = NEUTRAL_CACHE_DIR,
+) -> tuple[Dataset, dict[str, Any]]:
+    meta_file = path("salad", "salad_outside_cache_meta_file")
+    if meta_file.exists():
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        cache_file = meta.get("cache_file")
+        if isinstance(cache_file, str) and Path(cache_file).exists():
+            return load_openhermes_outside_cache(cache_dir=cache_dir), meta
+    return build_openhermes_outside_cache(
+        dataset_name=dataset_name,
+        split_name=split_name,
+        conversations_column=conversations_column,
+        max_sentences=max_sentences,
+        min_latin_ratio=min_latin_ratio,
+        sample_fraction=sample_fraction,
         cache_dir=cache_dir,
     )
