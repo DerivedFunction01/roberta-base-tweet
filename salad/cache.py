@@ -228,6 +228,25 @@ def _chunk_jailbreak_prompt(prompt: str, *, max_sentences: int = JAILBREAK_MAX_S
     return [" ".join(window) for window in _sliding_windows(sentences, max_sentences, stride=1)]
 
 
+def _filter_jailbreak_chunks(
+    chunks: list[str],
+    *,
+    model: Any,
+    threshold: float = JAILBREAK_FILTER_THRESHOLD,
+) -> tuple[list[tuple[str, float]], list[float]]:
+    probs = model.predict_proba(chunks)
+    classes = list(model.named_steps["clf"].classes_)
+    if "jailbreak" not in classes:
+        raise ValueError(f"Expected jailbreak class in filter model, got {classes}")
+    jailbreak_index = classes.index("jailbreak")
+    scores = [float(score) for score in probs[:, jailbreak_index]]
+    kept = [(chunk, score) for chunk, score in zip(chunks, scores) if score >= threshold]
+    if not kept and scores:
+        best_index = int(max(range(len(scores)), key=scores.__getitem__))
+        kept = [(chunks[best_index], scores[best_index])]
+    return kept, scores
+
+
 def _filter_openhermes_split(
     split: Dataset,
     *,
@@ -415,6 +434,9 @@ def _build_jackhhao_classification_cache(
 ) -> tuple[Dataset, dict[str, Any]]:
     raw = _load_split(dataset_name, None, split_name)
     cache_dir.mkdir(parents=True, exist_ok=True)
+    if not JAILBREAK_FILTER_MODEL_FILE.exists():
+        raise FileNotFoundError(f"Missing jailbreak filter model: {JAILBREAK_FILTER_MODEL_FILE}")
+    filter_model = load_filter_model(JAILBREAK_FILTER_MODEL_FILE)
 
     stats = {
         "total": 0,
@@ -422,7 +444,9 @@ def _build_jackhhao_classification_cache(
         "dropped_empty": 0,
         "dropped_label": 0,
         "dropped_no_chunks": 0,
+        "dropped_filter": 0,
         "generated_chunks": 0,
+        "kept_chunks": 0,
     }
     records: list[dict[str, Any]] = []
     for fallback_source_id, row in enumerate(tqdm(raw, desc="Filtering jailbreak prompts")):
@@ -439,8 +463,12 @@ def _build_jackhhao_classification_cache(
         if not chunks:
             stats["dropped_no_chunks"] += 1
             continue
+        filtered_chunks, scores = _filter_jailbreak_chunks(chunks, model=filter_model)
         stats["kept_prompts"] += 1
-        for chunk_index, chunk in enumerate(chunks):
+        stats["generated_chunks"] += len(chunks)
+        stats["kept_chunks"] += len(filtered_chunks)
+        stats["dropped_filter"] += len(chunks) - len(filtered_chunks)
+        for chunk_index, (chunk, score) in enumerate(filtered_chunks):
             records.append(
                 {
                     "source_id": fallback_source_id * 10_000 + chunk_index,
@@ -448,9 +476,9 @@ def _build_jackhhao_classification_cache(
                     "label": output_label,
                     "prompt_source_id": fallback_source_id,
                     "chunk_index": chunk_index,
+                    "chunk_score": score,
                 }
             )
-        stats["generated_chunks"] += len(chunks)
 
     dataset = Dataset.from_list(records)
     out_path = cache_dir / "jailbreak.parquet"
@@ -464,6 +492,8 @@ def _build_jackhhao_classification_cache(
         "output_label": output_label,
         "max_sentences": max_sentences,
         "stats": stats,
+        "filter_model_file": str(JAILBREAK_FILTER_MODEL_FILE),
+        "filter_threshold": JAILBREAK_FILTER_THRESHOLD,
         "cache_file": str(out_path),
         "total_rows": len(dataset),
         "label": output_label,

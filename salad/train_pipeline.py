@@ -32,6 +32,8 @@ from salad.defaults import (
     JAILBREAK_CACHE_DIR,
     JAILBREAK_BENIGN_CACHE_DIR,
     JAILBREAK_DATASET_NAME,
+    JAILBREAK_FILTER_MODEL_FILE,
+    JAILBREAK_FILTER_THRESHOLD,
     JAILBREAK_LABEL_COLUMN,
     JAILBREAK_MAX_SENTENCES,
     JAILBREAK_PROMPT_COLUMN,
@@ -137,6 +139,8 @@ def main() -> None:
     print(f"Jailbreak dataset: {JAILBREAK_DATASET_NAME} / {JAILBREAK_SPLIT}")
     print(f"Jailbreak cache: {JAILBREAK_CACHE_DIR}")
     print(f"Jailbreak benign cache: {JAILBREAK_BENIGN_CACHE_DIR}")
+    print(f"Jailbreak filter model: {JAILBREAK_FILTER_MODEL_FILE}")
+    print(f"Jailbreak filter threshold: {JAILBREAK_FILTER_THRESHOLD}")
     print(f"Outside dataset: {NEUTRAL_DATASET_NAME} / {NEUTRAL_SPLIT}")
     print(f"Tokenizer: roberta-base")
     print(f"Output: {TOKENIZED_DATASET_DIR}")
@@ -192,6 +196,8 @@ def main() -> None:
             "unsafe_cache_dir": str(CACHE_DIR),
             "outside_cache_dir": str(NEUTRAL_CACHE_DIR),
             "outside_label": OUTSIDE_LABEL,
+            "jailbreak_filter_model_file": str(JAILBREAK_FILTER_MODEL_FILE),
+            "jailbreak_filter_threshold": JAILBREAK_FILTER_THRESHOLD,
             "label2id": label2id,
             "id2label": id2label,
             "category_labels": category_labels,

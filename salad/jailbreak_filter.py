@@ -243,6 +243,9 @@ def fit_and_save(
 def load_filter_model(model_file: Path = MODEL_FILE) -> Pipeline:
     if not model_file.exists():
         raise FileNotFoundError(f"Missing trained filter model: {model_file}")
+    main_module = sys.modules.get("__main__")
+    if main_module is not None:
+        setattr(main_module, "clean_jailbreak_text", clean_jailbreak_text)
     model = joblib.load(model_file)
     if not isinstance(model, Pipeline):
         raise TypeError(f"Expected sklearn Pipeline in {model_file}, got {type(model)!r}")
