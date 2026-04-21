@@ -1,0 +1,20 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+DATASET_NAME = "cardiffnlp/tweet_eval"
+SUBSET = "sentiment"
+
+OUTPUT_DIR = Path("tokenized_dataset")
+
+MAX_LENGTH = 128
+SAME_CLASS_RATIO = 0.5
+REUSE_LIMIT = 2
+TRAIN_EXAMPLES = 12_000
+VALIDATION_EXAMPLES = 2_000
+TEST_EXAMPLES = 2_000
+
+STRIP_QUOTE_ARTIFACTS = True
+NORMALIZE_UNICODE_ESCAPES = True
+NORMALIZE_ALL_CAPS_DICTIONARY_WORDS = False
