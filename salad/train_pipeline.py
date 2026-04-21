@@ -74,7 +74,7 @@ def main() -> None:
     id2label = {idx: label for label, idx in label2id.items()}
     category_to_slug = {label: slugify_label(label) for label in category_labels}
 
-    tokenizer = AutoTokenizer.from_pretrained("cardiffnlp/twitter-roberta-base-2021-124m", use_fast=True)
+    tokenizer = AutoTokenizer.from_pretrained("roberta-base", use_fast=True)
 
     combined_split = concatenate_datasets([*unsafe_label_splits.values(), outside_split])
 
@@ -89,7 +89,7 @@ def main() -> None:
     print(f"Unsafe dataset: {DATASET_NAME} / {SUBSET}")
     print(f"Unsafe labels: {category_labels}")
     print(f"Outside dataset: {NEUTRAL_DATASET_NAME} / {NEUTRAL_SPLIT}")
-    print(f"Tokenizer: cardiffnlp/twitter-roberta-base-2021-124m")
+    print(f"Tokenizer: roberta-base")
     print(f"Output: {TOKENIZED_DATASET_DIR}")
     print(f"Label map: {path('salad', 'salad_label_map_file')}")
     print(f"Unsafe kept rows: {cache_meta['filter_stats']['kept']}")
