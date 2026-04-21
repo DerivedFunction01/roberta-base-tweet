@@ -211,11 +211,46 @@ def build_standalone_examples(
     records: list[dict[str, Any]] = []
     label_counts = {label: 0 for label in pools}
     balanced_count, free_count = _split_balanced_and_free(num_examples, balanced_coverage_ratio)
-    balanced_labels = [sampler.sample_balanced_label() for _ in range(balanced_count)]
-    free_labels = [sampler.sample_label() for _ in range(free_count)]
+    active_labels = list(pools)
 
-    for label in tqdm(balanced_labels + free_labels, desc="Building standalone examples"):
-        record = sampler.sample_record(label)
+    def _draw_record(picker) -> tuple[str, dict[str, Any]] | None:
+        nonlocal active_labels
+        while active_labels:
+            labels = sampler.active_labels(active_labels)
+            if not labels:
+                return None
+            label = picker(labels)
+            try:
+                return label, sampler.sample_record(label)
+            except RuntimeError:
+                if label in active_labels:
+                    active_labels = [candidate for candidate in active_labels if candidate != label]
+        return None
+
+    for _ in tqdm(range(balanced_count), desc="Building balanced standalone examples"):
+        drawn = _draw_record(sampler.sample_balanced_label)
+        if drawn is None:
+            break
+        label, record = drawn
+        label_counts[label] += 1
+        records.append(
+            {
+                "text_a": str(record["text"]),
+                "text_b": "",
+                "label_a": label,
+                "label_b": "",
+                "source_id_a": record["source_id"],
+                "source_id_b": -1,
+                "example_kind": "standalone",
+                "pair_kind": "",
+            }
+        )
+
+    for _ in tqdm(range(free_count), desc="Building free standalone examples"):
+        drawn = _draw_record(sampler.sample_label)
+        if drawn is None:
+            break
+        label, record = drawn
         label_counts[label] += 1
         records.append(
             {
