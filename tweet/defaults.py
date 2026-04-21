@@ -8,7 +8,7 @@ SUBSET = "sentiment"
 
 OUTPUT_DIR = Path("tokenized_dataset")
 
-MAX_LENGTH = 128
+MAX_LENGTH = 512
 SAME_CLASS_RATIO = 0.5
 REUSE_LIMIT = 2
 TRAIN_EXAMPLES = 100_000
