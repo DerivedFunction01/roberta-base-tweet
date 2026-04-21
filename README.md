@@ -15,6 +15,7 @@ This project should use **token classification**. The idea is to label the whole
 - Zip that folder and move it into Colab together with the root `label2id.json`.
 - `tweet/train.py` loads the cache from the default path in `paths.py` and trains without any command-line arguments.
 - `tweet/defaults.py` holds the assumed default config values for both steps.
+- `tweet/mutations.py` provides the light sentence and character augmentation used while building the cache.
 - If `label2id.json` is missing, the trainer falls back to `{"neg": 0, "neu": 1, "pos": 2}`.
 
 ## Next Game Plan

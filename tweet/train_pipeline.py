@@ -22,8 +22,10 @@ from tweet.defaults import (
     SUBSET,
     TEST_EXAMPLES,
     TRAIN_EXAMPLES,
+    USE_TWEET_MUTATION,
     VALIDATION_EXAMPLES,
 )
+from tweet.mutations import TweetMutator
 
 DEFAULT_LABEL2ID = {"neg": 0, "neu": 1, "pos": 2}
 
@@ -58,6 +60,9 @@ def main() -> None:
     seed = 42
     tokenizer = AutoTokenizer.from_pretrained(model_checkpoint, use_fast=True)
     dataset = load_dataset(DATASET_NAME, SUBSET)
+    mutator = None
+    if USE_TWEET_MUTATION:
+        mutator = TweetMutator()
 
     if TOKENIZED_DATASET_DIR.exists():
         shutil.rmtree(TOKENIZED_DATASET_DIR)
@@ -92,6 +97,8 @@ def main() -> None:
             strip_quotes=STRIP_QUOTE_ARTIFACTS,
             normalize_escapes=NORMALIZE_UNICODE_ESCAPES,
             lowercase_dictionary_caps=NORMALIZE_ALL_CAPS_DICTIONARY_WORDS,
+            mutator=mutator if split_name == "train" else None,
+            mutation_seed=seed,
         )
         tokenized_splits[split_name] = split
         split_summaries[split_name] = summary
@@ -115,6 +122,7 @@ def main() -> None:
             "seed": seed,
             "label2id": label2id,
             "split_summaries": split_summaries,
+            "tweet_mutation": {"enabled": USE_TWEET_MUTATION},
         },
     )
 

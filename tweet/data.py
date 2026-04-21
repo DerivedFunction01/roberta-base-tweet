@@ -9,6 +9,7 @@ from datasets import Dataset, DatasetDict, load_dataset
 from transformers import PreTrainedTokenizerBase
 
 from tweet.config import ID2LABEL, LABEL2ID, LABEL_NAMES
+from tweet.mutations import TweetMutator
 from tweet.preprocess import clean_tweet_text
 
 
@@ -74,12 +75,16 @@ def build_sentiment_pools(
     *,
     text_column: str = "text",
     label_column: str = "label",
+    lang_column: str | None = None,
     strip_quotes: bool = True,
     normalize_escapes: bool = True,
     lowercase_dictionary_caps: bool = False,
+    mutator: TweetMutator | None = None,
+    mutation_seed: int = 42,
 ) -> dict[str, list[str]]:
     """Collect cleaned tweets into label pools."""
     pools = {label: [] for label in LABEL_NAMES}
+    rng = random.Random(mutation_seed)
     for row in split:
         text = clean_tweet_text(
             str(row.get(text_column, "")),
@@ -90,7 +95,12 @@ def build_sentiment_pools(
         if not text:
             continue
         label = _label_name(row[label_column])
+        lang = str(row.get(lang_column, "")) if lang_column else None
         pools[label].append(text)
+        if mutator is not None:
+            for variant in mutator.augment(text, rng=rng, lang=lang):
+                if variant != text:
+                    pools[label].append(variant)
     return pools
 
 
@@ -103,18 +113,24 @@ def build_paired_examples(
     seed: int,
     text_column: str = "text",
     label_column: str = "label",
+    lang_column: str | None = None,
     strip_quotes: bool = True,
     normalize_escapes: bool = True,
     lowercase_dictionary_caps: bool = False,
+    mutator: TweetMutator | None = None,
+    mutation_seed: int = 42,
 ) -> tuple[Dataset, dict[str, Any]]:
     """Create paired token-classification examples from a tweet sentiment split."""
     pools = build_sentiment_pools(
         split,
         text_column=text_column,
         label_column=label_column,
+        lang_column=lang_column,
         strip_quotes=strip_quotes,
         normalize_escapes=normalize_escapes,
         lowercase_dictionary_caps=lowercase_dictionary_caps,
+        mutator=mutator,
+        mutation_seed=mutation_seed,
     )
     for label, texts in pools.items():
         if not texts:
@@ -208,9 +224,12 @@ def build_tokenized_split(
     max_length: int,
     text_column: str = "text",
     label_column: str = "label",
+    lang_column: str | None = None,
     strip_quotes: bool = True,
     normalize_escapes: bool = True,
     lowercase_dictionary_caps: bool = False,
+    mutator: TweetMutator | None = None,
+    mutation_seed: int = 42,
 ) -> tuple[Dataset, dict[str, Any]]:
     """Build and tokenize a paired token-classification dataset from one split."""
     paired, summary = build_paired_examples(
@@ -221,9 +240,12 @@ def build_tokenized_split(
         seed=seed,
         text_column=text_column,
         label_column=label_column,
+        lang_column=lang_column,
         strip_quotes=strip_quotes,
         normalize_escapes=normalize_escapes,
         lowercase_dictionary_caps=lowercase_dictionary_caps,
+        mutator=mutator,
+        mutation_seed=mutation_seed,
     )
     tokenized = paired.map(
         lambda batch: tokenize_paired_examples(batch, tokenizer=tokenizer, max_length=max_length),
@@ -232,4 +254,3 @@ def build_tokenized_split(
         desc="Tokenizing sentiment pairs",
     )
     return tokenized, summary
-
