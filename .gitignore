@@ -210,7 +210,8 @@ __marimo__/
 *.codex
 *.parquet
 hf_token
-sentences_cache/*
+*_cache/*
+results/*
 
 *.csv
 
