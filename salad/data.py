@@ -62,6 +62,115 @@ def _normalize_source_id(value: Any, fallback: int) -> int:
     return int(fallback)
 
 
+def _compose_segment_text(segment_records: list[dict[str, Any]], separator: str = "\n\n") -> tuple[str, list[dict[str, Any]]]:
+    parts: list[str] = []
+    segments: list[dict[str, Any]] = []
+    cursor = 0
+    for index, record in enumerate(segment_records):
+        if index > 0:
+            parts.append(separator)
+            cursor += len(separator)
+        text = str(record["text"])
+        start = cursor
+        parts.append(text)
+        cursor += len(text)
+        segments.append(
+            {
+                "label": str(record["label"]),
+                "text": text,
+                "source_id": int(record["source_id"]),
+                "start": start,
+                "end": cursor,
+            }
+        )
+    return "".join(parts), segments
+
+
+def _build_contextual_segment_roles(
+    *,
+    rng: random.Random,
+    num_hostile: int,
+    num_neutral: int,
+) -> list[str]:
+    hostile_roles = []
+    if num_hostile >= 2 and rng.random() < 0.7:
+        hostile_roles.extend(["jailbreak", "unsafe"])
+    while len(hostile_roles) < num_hostile:
+        hostile_roles.append(rng.choice(["jailbreak", "unsafe"]))
+    rng.shuffle(hostile_roles)
+
+    neutral_slots = [0] * (num_hostile + 1)
+    between = min(num_neutral, max(0, num_hostile - 1))
+    for index in range(between):
+        neutral_slots[index + 1] += 1
+    remaining = num_neutral - between
+    for _ in range(remaining):
+        neutral_slots[rng.randrange(num_hostile + 1)] += 1
+
+    roles: list[str] = []
+    for index, hostile_role in enumerate(hostile_roles):
+        roles.extend([OUTSIDE_LABEL] * neutral_slots[index])
+        roles.append(hostile_role)
+    roles.extend([OUTSIDE_LABEL] * neutral_slots[-1])
+    return roles
+
+
+def _sample_contextual_record(
+    sampler: "PoolSampler",
+    *,
+    rng: random.Random,
+    unsafe_labels: list[str],
+    min_segments: int,
+    max_segments: int,
+) -> dict[str, Any] | None:
+    if max_segments < 2:
+        raise ValueError(f"max_segments must be at least 2, got {max_segments}")
+    max_hostile = max(1, min(3, max_segments - 1))
+    num_hostile = min(rng.choices([1, 2, 3], weights=[0.7, 0.2, 0.1], k=1)[0], max_hostile)
+    max_neutral = max(1, max_segments - num_hostile)
+    min_neutral = 1 if min_segments >= 2 else 0
+    num_neutral = rng.randint(min_neutral, max_neutral)
+
+    roles = _build_contextual_segment_roles(rng=rng, num_hostile=num_hostile, num_neutral=num_neutral)
+    segment_records: list[dict[str, Any]] = []
+    primary_label = OUTSIDE_LABEL
+    for role in roles:
+        if role == OUTSIDE_LABEL:
+            label = OUTSIDE_LABEL
+        elif role == "jailbreak":
+            label = "Jailbreak"
+        else:
+            label = sampler.sample_label(unsafe_labels) if unsafe_labels else OUTSIDE_LABEL
+        candidate_labels = [label]
+        candidate_labels.extend(candidate for candidate in sampler.active_labels() if candidate != label)
+        record = None
+        for candidate in candidate_labels:
+            try:
+                record = sampler.sample_record(candidate)
+                label = candidate
+                break
+            except RuntimeError:
+                continue
+        if record is None:
+            return None
+        if primary_label == OUTSIDE_LABEL and label != OUTSIDE_LABEL:
+            primary_label = label
+        segment_records.append({"label": label, "text": str(record["text"]), "source_id": record["source_id"]})
+
+    text, segments = _compose_segment_text(segment_records)
+    return {
+        "text_a": text,
+        "text_b": "",
+        "label_a": primary_label,
+        "label_b": "",
+        "source_id_a": segments[0]["source_id"] if segments else -1,
+        "source_id_b": -1,
+        "example_kind": "standalone_contextual",
+        "pair_kind": "",
+        "segments": segments,
+    }
+
+
 class PoolSampler:
     def __init__(self, pools: dict[str, list[dict[str, Any]]], *, reuse_limit: int, seed: int) -> None:
         self.pools = pools
@@ -194,6 +303,9 @@ def build_standalone_examples(
     *,
     num_examples: int,
     balanced_coverage_ratio: float,
+    contextual_probability: float,
+    contextual_min_segments: int,
+    contextual_max_segments: int,
     precleaned: bool,
     reuse_limit: int,
     seed: int,
@@ -214,8 +326,10 @@ def build_standalone_examples(
             raise RuntimeError(f"Pool '{label}' is empty; cannot build standalone examples")
 
     sampler = PoolSampler(pools, reuse_limit=reuse_limit, seed=seed)
+    rng = random.Random(seed)
     records: list[dict[str, Any]] = []
     label_counts = {label: 0 for label in pools}
+    contextual_examples = 0
     balanced_count, free_count = _split_balanced_and_free(num_examples, balanced_coverage_ratio)
     active_labels = list(pools)
 
@@ -234,6 +348,20 @@ def build_standalone_examples(
         return None
 
     for _ in tqdm(range(balanced_count), desc="Building balanced standalone examples"):
+        if contextual_probability > 0.0 and rng.random() < contextual_probability:
+            record = _sample_contextual_record(
+                sampler,
+                rng=rng,
+                unsafe_labels=[label for label in pools if label not in {OUTSIDE_LABEL, "Jailbreak"}],
+                min_segments=contextual_min_segments,
+                max_segments=contextual_max_segments,
+            )
+            if record is not None:
+                contextual_examples += 1
+                for segment in record.get("segments", []):
+                    label_counts[str(segment["label"])] += 1
+                records.append(record)
+                continue
         drawn = _draw_record(sampler.sample_balanced_label)
         if drawn is None:
             break
@@ -249,10 +377,25 @@ def build_standalone_examples(
                 "source_id_b": -1,
                 "example_kind": "standalone",
                 "pair_kind": "",
+                "segments": [],
             }
         )
 
     for _ in tqdm(range(free_count), desc="Building free standalone examples"):
+        if contextual_probability > 0.0 and rng.random() < contextual_probability:
+            record = _sample_contextual_record(
+                sampler,
+                rng=rng,
+                unsafe_labels=[label for label in pools if label not in {OUTSIDE_LABEL, "Jailbreak"}],
+                min_segments=contextual_min_segments,
+                max_segments=contextual_max_segments,
+            )
+            if record is not None:
+                contextual_examples += 1
+                for segment in record.get("segments", []):
+                    label_counts[str(segment["label"])] += 1
+                records.append(record)
+                continue
         drawn = _draw_record(sampler.sample_label)
         if drawn is None:
             break
@@ -268,10 +411,16 @@ def build_standalone_examples(
                 "source_id_b": -1,
                 "example_kind": "standalone",
                 "pair_kind": "",
+                "segments": [],
             }
         )
 
-    summary = {"pool_sizes": {label: len(texts) for label, texts in pools.items()}, "label_counts": label_counts, "num_examples": len(records)}
+    summary = {
+        "pool_sizes": {label: len(texts) for label, texts in pools.items()},
+        "label_counts": label_counts,
+        "contextual_examples": contextual_examples,
+        "num_examples": len(records),
+    }
     return Dataset.from_list(records), summary
 
 
@@ -364,18 +513,48 @@ def tokenize_standalone_examples(
     label2id: dict[str, int],
     category_to_slug: dict[str, str],
 ) -> dict[str, list[list[int]]]:
-    batch = tokenizer(examples["text_a"], truncation=True, max_length=max_length, padding=False)
+    batch = tokenizer(
+        examples["text_a"],
+        truncation=True,
+        max_length=max_length,
+        padding=False,
+        return_offsets_mapping=True,
+    )
     labels: list[list[int]] = []
+    segments_batch = examples.get("segments", [])
     for index, label_a in enumerate(examples["label_a"]):
+        segments = segments_batch[index] if index < len(segments_batch) else []
+        if segments:
+            offsets = batch["offset_mapping"][index]
+            segment_labels: list[int] = []
+            seen_segments: set[int] = set()
+            for start, end in offsets:
+                if start == end:
+                    segment_labels.append(-100)
+                    continue
+                center = (start + end) / 2.0
+                matched_index = None
+                for segment_index, segment in enumerate(segments):
+                    if segment["start"] <= center < segment["end"]:
+                        matched_index = segment_index
+                        break
+                if matched_index is None:
+                    segment_labels.append(-100)
+                    continue
+                segment = segments[matched_index]
+                first_id, other_id = _token_label_ids(
+                    str(segment["label"]),
+                    label2id=label2id,
+                    category_to_slug=category_to_slug,
+                )
+                segment_labels.append(first_id if matched_index not in seen_segments else other_id)
+                seen_segments.add(matched_index)
+            labels.append(segment_labels)
+            continue
+
         seq_ids = batch.sequence_ids(index)
-        labels.append(
-            _encode_token_labels(
-                seq_ids,
-                label_a=label_a,
-                label2id=label2id,
-                category_to_slug=category_to_slug,
-            )
-        )
+        labels.append(_encode_token_labels(seq_ids, label_a=label_a, label2id=label2id, category_to_slug=category_to_slug))
+    batch.pop("offset_mapping", None)
     batch["labels"] = labels
     return batch
 
@@ -419,6 +598,9 @@ def build_tokenized_split(
     max_length: int,
     label2id: dict[str, int],
     category_labels: list[str],
+    contextual_probability: float = 0.0,
+    contextual_min_segments: int = 2,
+    contextual_max_segments: int = 5,
     text_column: str = "text",
     label_column: str = "label",
     mutator: TweetMutator | None = None,
@@ -438,6 +620,9 @@ def build_tokenized_split(
         split,
         num_examples=counts["standalone"],
         balanced_coverage_ratio=balanced_coverage_ratio,
+        contextual_probability=contextual_probability,
+        contextual_min_segments=contextual_min_segments,
+        contextual_max_segments=contextual_max_segments,
         precleaned=True,
         reuse_limit=reuse_limit,
         seed=seed,
