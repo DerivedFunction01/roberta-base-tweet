@@ -10,11 +10,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from datasets import DatasetDict, load_dataset
+from datasets import DatasetDict, concatenate_datasets
 from transformers import AutoTokenizer
 from tqdm.auto import tqdm
 
-from paths import PIPELINE_RESULTS_DIR, TOKENIZED_DATASET_DIR
+from paths import PIPELINE_RESULTS_DIR, SENTIMENT_CACHE_DIR, TOKENIZED_DATASET_DIR
+from tweet.cache import ensure_clean_sentiment_cache
 from tweet.data import build_tokenized_split
 from tweet.defaults import (
     BALANCED_COVERAGE_RATIO,
@@ -48,10 +49,18 @@ def main() -> None:
     model_checkpoint = "roberta-base"
     seed = 42
     tokenizer = AutoTokenizer.from_pretrained(model_checkpoint, use_fast=True)
-    dataset = load_dataset(DATASET_NAME, SUBSET)
     mutator = None
     if USE_TWEET_MUTATION:
         mutator = TweetMutator()
+
+    cached_label_splits, cache_meta = ensure_clean_sentiment_cache(
+        DATASET_NAME,
+        SUBSET,
+        strip_quotes=STRIP_QUOTE_ARTIFACTS,
+        normalize_escapes=NORMALIZE_UNICODE_ESCAPES,
+        lowercase_dictionary_caps=NORMALIZE_ALL_CAPS_DICTIONARY_WORDS,
+        cache_dir=SENTIMENT_CACHE_DIR,
+    )
 
     if TOKENIZED_DATASET_DIR.exists():
         shutil.rmtree(TOKENIZED_DATASET_DIR)
@@ -64,7 +73,9 @@ def main() -> None:
     print(f"Dataset: {DATASET_NAME} / {SUBSET}")
     print(f"Tokenizer: {model_checkpoint}")
     print(f"Output: {TOKENIZED_DATASET_DIR}")
+    print(f"Sentiment cache: {SENTIMENT_CACHE_DIR}")
     print(f"Label map: {label2id}")
+    print(f"Cached counts: {cache_meta['counts']}")
 
     split_specs = [
         ("train", TRAIN_EXAMPLES),
@@ -75,17 +86,25 @@ def main() -> None:
     tokenized_splits = {}
     split_summaries = {}
     for split_name, num_examples in tqdm(split_specs, desc="Building splits"):
+        cached_split = concatenate_datasets(
+            [
+                cached_label_splits[label].filter(lambda row, split_name=split_name: row["split"] == split_name)
+                for label in ("neg", "neu", "pos")
+            ]
+        )
         split, summary = build_tokenized_split(
-            dataset[split_name],
+            cached_split,
             num_examples=num_examples,
             standalone_ratio=STANDALONE_RATIO,
             same_class_ratio=SAME_CLASS_RATIO,
             mixed_class_ratio=MIXED_CLASS_RATIO,
             balanced_coverage_ratio=BALANCED_COVERAGE_RATIO,
+            precleaned=True,
             reuse_limit=REUSE_LIMIT,
             seed=seed,
             tokenizer=tokenizer,
             max_length=MAX_LENGTH,
+            lang_column="lang",
             strip_quotes=STRIP_QUOTE_ARTIFACTS,
             normalize_escapes=NORMALIZE_UNICODE_ESCAPES,
             lowercase_dictionary_caps=NORMALIZE_ALL_CAPS_DICTIONARY_WORDS,
@@ -104,6 +123,7 @@ def main() -> None:
             "dataset_name": DATASET_NAME,
             "subset": SUBSET,
             "model_checkpoint": model_checkpoint,
+            "sentiment_cache_dir": str(SENTIMENT_CACHE_DIR),
             "max_length": MAX_LENGTH,
             "standalone_ratio": STANDALONE_RATIO,
             "same_class_ratio": SAME_CLASS_RATIO,

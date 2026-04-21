@@ -5,10 +5,9 @@ import math
 from typing import Any
 
 import numpy as np
-from datasets import Dataset, DatasetDict, concatenate_datasets
+from datasets import Dataset, concatenate_datasets
 from tqdm.auto import tqdm
 from transformers import PreTrainedTokenizerBase
-from tweet.preprocess import clean_tweet_text
 from text_utils.mutations import TweetMutator
 from tweet.labels import (
     LABEL2ID,
@@ -21,7 +20,7 @@ from tweet.labels import (
 class PoolSampler:
     """Sample tweet indices from per-label pools with bounded reuse."""
 
-    def __init__(self, pools: dict[str, list[str]], *, reuse_limit: int, seed: int) -> None:
+    def __init__(self, pools: dict[str, list[dict[str, Any]]], *, reuse_limit: int, seed: int) -> None:
         self.pools = pools
         self.rng = random.Random(seed)
         self.max_uses = max(1, reuse_limit + 1)
@@ -43,13 +42,16 @@ class PoolSampler:
         weights = [self.label_weights[label] for label in labels]
         return self.rng.choices(labels, weights=weights, k=1)[0]
 
-    def sample_text(self, label: str) -> str:
+    def sample_record(self, label: str) -> dict[str, Any]:
         eligible = self._eligible_indices(label)
         if not eligible:
             raise RuntimeError(f"No reusable examples left in label pool '{label}'")
         index = self.rng.choice(eligible)
         self.usage_counts[label][index] += 1
         return self.pools[label][index]
+
+    def sample_text(self, label: str) -> str:
+        return str(self.sample_record(label)["text"])
 
 
 def _label_name(value: Any) -> str:
@@ -149,6 +151,7 @@ def _encode_token_labels(
 def build_sentiment_pools(
     split: Dataset,
     *,
+    precleaned: bool = False,
     text_column: str = "text",
     label_column: str = "label",
     lang_column: str | None = None,
@@ -157,26 +160,45 @@ def build_sentiment_pools(
     lowercase_dictionary_caps: bool = False,
     mutator: TweetMutator | None = None,
     mutation_seed: int = 42,
-) -> dict[str, list[str]]:
+) -> dict[str, list[dict[str, Any]]]:
     """Collect cleaned tweets into label pools."""
-    pools = {label: [] for label in SENTIMENT_LABELS}
+    pools: dict[str, list[dict[str, Any]]] = {label: [] for label in SENTIMENT_LABELS}
     rng = random.Random(mutation_seed)
-    for row in split:
-        text = clean_tweet_text(
-            str(row.get(text_column, "")),
-            strip_quotes=strip_quotes,
-            normalize_escapes=normalize_escapes,
-            lowercase_dictionary_caps=lowercase_dictionary_caps,
-        )
+    for fallback_source_id, row in enumerate(split):
+        if precleaned:
+            text = str(row.get(text_column, ""))
+        else:
+            from tweet.preprocess import clean_tweet_text
+
+            text = clean_tweet_text(
+                str(row.get(text_column, "")),
+                strip_quotes=strip_quotes,
+                normalize_escapes=normalize_escapes,
+                lowercase_dictionary_caps=lowercase_dictionary_caps,
+            )
         if not text:
             continue
         label = _label_name(row[label_column])
         lang = str(row.get(lang_column, "")) if lang_column else None
-        pools[label].append(text)
+        source_id = int(row.get("source_id", fallback_source_id))
+        base_record = {
+            "source_id": source_id,
+            "text": text,
+            "label": label,
+            "lang": lang or "",
+        }
+        pools[label].append(base_record)
         if mutator is not None:
             for variant in mutator.augment(text, rng=rng, lang=lang):
                 if variant != text:
-                    pools[label].append(variant)
+                    pools[label].append(
+                        {
+                            "source_id": source_id,
+                            "text": variant,
+                            "label": label,
+                            "lang": lang or "",
+                        }
+                    )
     return pools
 
 
@@ -185,6 +207,7 @@ def build_standalone_examples(
     *,
     num_examples: int,
     balanced_coverage_ratio: float,
+    precleaned: bool,
     reuse_limit: int,
     seed: int,
     text_column: str = "text",
@@ -199,6 +222,7 @@ def build_standalone_examples(
     """Create standalone token-classification examples from a tweet sentiment split."""
     pools = build_sentiment_pools(
         split,
+        precleaned=precleaned,
         text_column=text_column,
         label_column=label_column,
         lang_column=lang_column,
@@ -208,12 +232,12 @@ def build_standalone_examples(
         mutator=mutator,
         mutation_seed=mutation_seed,
     )
-    for label, texts in pools.items():
-        if not texts:
+    for label, records in pools.items():
+        if not records:
             raise RuntimeError(f"Pool '{label}' is empty; cannot build standalone examples")
 
     sampler = PoolSampler(pools, reuse_limit=reuse_limit, seed=seed)
-    records: list[dict[str, str]] = []
+    records: list[dict[str, Any]] = []
     label_counts = {label: 0 for label in SENTIMENT_LABELS}
 
     balanced_count, free_count = _split_balanced_and_free(num_examples, balanced_coverage_ratio)
@@ -221,7 +245,8 @@ def build_standalone_examples(
     free_labels = [sampler.sample_label() for _ in range(free_count)]
 
     for label_a in tqdm(balanced_labels + free_labels, desc="Building standalone examples"):
-        text_a = sampler.sample_text(label_a)
+        record_a = sampler.sample_record(label_a)
+        text_a = str(record_a["text"])
         label_counts[label_a] += 1
         records.append(
             {
@@ -229,6 +254,8 @@ def build_standalone_examples(
                 "text_b": "",
                 "label_a": label_a,
                 "label_b": "",
+                "source_id_a": record_a["source_id"],
+                "source_id_b": -1,
                 "example_kind": "standalone",
                 "pair_kind": "",
             }
@@ -248,6 +275,7 @@ def build_paired_examples(
     num_examples: int,
     pair_kind: str,
     balanced_coverage_ratio: float,
+    precleaned: bool,
     reuse_limit: int,
     seed: int,
     text_column: str = "text",
@@ -265,6 +293,7 @@ def build_paired_examples(
 
     pools = build_sentiment_pools(
         split,
+        precleaned=precleaned,
         text_column=text_column,
         label_column=label_column,
         lang_column=lang_column,
@@ -274,13 +303,13 @@ def build_paired_examples(
         mutator=mutator,
         mutation_seed=mutation_seed,
     )
-    for label, texts in pools.items():
-        if not texts:
+    for label, records in pools.items():
+        if not records:
             raise RuntimeError(f"Pool '{label}' is empty; cannot build paired examples")
 
     sampler = PoolSampler(pools, reuse_limit=reuse_limit, seed=seed)
     rng = random.Random(seed)
-    records: list[dict[str, str]] = []
+    records: list[dict[str, Any]] = []
     label_counts = {label: 0 for label in SENTIMENT_LABELS}
 
     balanced_count, free_count = _split_balanced_and_free(num_examples, balanced_coverage_ratio)
@@ -296,11 +325,14 @@ def build_paired_examples(
                 other_labels = [label for label in SENTIMENT_LABELS if label != label_a]
                 label_b = sampler.sample_label(other_labels)
 
-        text_a = sampler.sample_text(label_a)
-        text_b = sampler.sample_text(label_b)
+        record_a = sampler.sample_record(label_a)
+        record_b = sampler.sample_record(label_b)
+        text_a = str(record_a["text"])
+        text_b = str(record_b["text"])
         if pair_kind == "mixed" and rng.random() < 0.5:
             text_a, text_b = text_b, text_a
             label_a, label_b = label_b, label_a
+            record_a, record_b = record_b, record_a
 
         label_counts[label_a] += 1
         label_counts[label_b] += 1
@@ -310,6 +342,8 @@ def build_paired_examples(
                 "text_b": text_b,
                 "label_a": label_a,
                 "label_b": label_b,
+                "source_id_a": record_a["source_id"],
+                "source_id_b": record_b["source_id"],
                 "example_kind": "paired",
                 "pair_kind": pair_kind,
             }
@@ -373,6 +407,7 @@ def build_tokenized_split(
     same_class_ratio: float,
     mixed_class_ratio: float,
     balanced_coverage_ratio: float,
+    precleaned: bool,
     reuse_limit: int,
     seed: int,
     tokenizer: PreTrainedTokenizerBase,
@@ -400,6 +435,7 @@ def build_tokenized_split(
         split,
         num_examples=counts["standalone"],
         balanced_coverage_ratio=balanced_coverage_ratio,
+        precleaned=precleaned,
         reuse_limit=reuse_limit,
         seed=seed,
         text_column=text_column,
@@ -416,6 +452,7 @@ def build_tokenized_split(
         num_examples=counts["same"],
         pair_kind="same",
         balanced_coverage_ratio=balanced_coverage_ratio,
+        precleaned=precleaned,
         reuse_limit=reuse_limit,
         seed=seed,
         text_column=text_column,
@@ -432,6 +469,7 @@ def build_tokenized_split(
         num_examples=counts["mixed"],
         pair_kind="mixed",
         balanced_coverage_ratio=balanced_coverage_ratio,
+        precleaned=precleaned,
         reuse_limit=reuse_limit,
         seed=seed + 1,
         text_column=text_column,
